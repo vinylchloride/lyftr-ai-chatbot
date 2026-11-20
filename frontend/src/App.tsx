@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowUp, Check, CircleHelp, Command, LoaderCircle, Plus, Sparkles } from "lucide-react";
+import {
+  ArrowUp,
+  ArrowUpRight,
+  BookOpen,
+  Check,
+  CircleHelp,
+  Compass,
+  LoaderCircle,
+  MessageSquareText,
+  PenLine,
+  Plus,
+} from "lucide-react";
 
 type Metadata = {
   resolution_source: "LLM_CACHE" | "LIVE_INFERENCE";
@@ -23,6 +34,8 @@ type ChatResponse = {
   metadata: Metadata;
 };
 
+type ServiceStatus = "checking" | "online" | "offline";
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
 
 function createSessionId(): string {
@@ -45,11 +58,31 @@ export default function App() {
   const [simulateFailover, setSimulateFailover] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const [showTips, setShowTips] = useState(false);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus>("checking");
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, isSending]);
+
+  useEffect(() => {
+    let active = true;
+    const checkHealth = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/health`);
+        if (active) setServiceStatus(response.ok ? "online" : "offline");
+      } catch {
+        if (active) setServiceStatus("offline");
+      }
+    };
+
+    void checkHealth();
+    const intervalId = window.setInterval(checkHealth, 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -92,45 +125,62 @@ export default function App() {
   }
 
   const hasMessages = messages.length > 0;
+  const firstUserMessage = messages.find((message) => message.role === "user")?.content;
+  const conversationTitle = firstUserMessage
+    ? firstUserMessage.length > 28
+      ? `${firstUserMessage.slice(0, 28)}…`
+      : firstUserMessage
+    : "New conversation";
+  const statusLabel = {
+    checking: "Checking service",
+    online: "Service online",
+    offline: "Service unavailable",
+  }[serviceStatus];
 
   return (
     <main className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="/" aria-label="Lyftr AI home">
-          <span className="brand-mark"><Sparkles size={18} strokeWidth={2.2} /></span>
-          <span>lyftr<span className="brand-light">.ai</span></span>
+          <span className="brand-mark">L</span>
+          <span className="brand-name">LYFTR<span className="brand-light"> / AI</span></span>
         </a>
         <button className="new-chat-button" onClick={() => window.location.reload()}>
-          <Plus size={17} /> <span>New conversation</span> <kbd>⌘ K</kbd>
+          <PenLine size={15} /> <span>New conversation</span>
         </button>
         <div className="sidebar-divider" />
-        <div className="sidebar-label">YOUR SESSION</div>
+        <div className="sidebar-label">CURRENT CHAT</div>
         <div className="session-card">
-          <span className="session-dot" />
+          <span className="session-icon"><MessageSquareText size={14} /></span>
           <span className="session-copy">
-            <strong>New conversation</strong>
+            <strong>{conversationTitle}</strong>
             <small>{sessionId.slice(0, 14)}…</small>
           </span>
-          <span className="live-indicator">LIVE</span>
+          <span className="session-state">OPEN</span>
         </div>
         <div className="sidebar-spacer" />
         <div className="sidebar-note">
           <span className="note-icon"><CircleHelp size={15} /></span>
-          <span><strong>Built to keep going.</strong><br />Automatic key failover keeps your chat available.</span>
+          <span><strong>Clear by design.</strong><br />See the source, speed and token use for every reply.</span>
         </div>
         <div className="sidebar-footer">
-          <div className="avatar">V</div>
-          <div className="profile-copy"><strong>Guest session</strong><small>No account required</small></div>
-          <button className="icon-button footer-help" aria-label="Show shortcuts" onClick={() => setShowTips(!showTips)}>
-            <Command size={16} />
+          <div className="footer-mark">L</div>
+          <div className="profile-copy"><strong>Private session</strong><small>New chat on page refresh</small></div>
+          <button className="icon-button footer-help" aria-label="About this chat" onClick={() => setShowTips(!showTips)}>
+            <CircleHelp size={16} />
           </button>
         </div>
       </aside>
 
       <section className="chat-panel">
         <header className="topbar">
-          <div className="mobile-brand"><span className="brand-mark"><Sparkles size={16} /></span> lyftr<span className="brand-light">.ai</span></div>
-          <div className="model-pill"><span className="model-pulse" /> Gemini 2.0 Flash <span className="pill-divider" /> <span className="ready-text">Ready</span></div>
+          <div className="mobile-brand"><span className="brand-mark">L</span><span className="brand-name">LYFTR<span className="brand-light"> / AI</span></span></div>
+          <div className="topbar-title">
+            <span>WORKSPACE <span className="breadcrumb-divider">/</span> CHAT</span>
+            <strong>{conversationTitle}</strong>
+          </div>
+          <div className={`connection-state ${serviceStatus}`} role="status" aria-live="polite">
+            <span className="connection-dot" />{statusLabel}
+          </div>
           <button className="icon-button tips-button" aria-label="About this chat" onClick={() => setShowTips(!showTips)}>
             <CircleHelp size={18} />
           </button>
@@ -139,19 +189,19 @@ export default function App() {
         <div className={`transcript ${hasMessages ? "has-messages" : ""}`} ref={transcriptRef}>
           {!hasMessages ? (
             <div className="welcome">
-              <div className="welcome-eyebrow"><span className="eyebrow-line" /> YOUR THOUGHT PARTNER <span className="eyebrow-line" /></div>
-              <div className="welcome-icon"><Sparkles size={25} strokeWidth={1.7} /></div>
-              <h1>A little more <em>thoughtful.</em></h1>
-              <p>Ask anything. Your conversation stays in context, while smart caching and automatic failover keep things quick and reliable.</p>
+              <div className="welcome-eyebrow"><span className="eyebrow-line" /> A CLEARER WAY TO THINK <span className="eyebrow-line" /></div>
+              <div className="welcome-icon">L<span>.</span></div>
+              <h1>Make room for<br /><em>a better question.</em></h1>
+              <p>A considered space to write, explore and work things through. Your conversation keeps its context; every reply shows how it was answered.</p>
               <div className="suggestions">
-                <button onClick={() => setInput("Help me plan a focused, productive week.")}>
-                  <span className="suggestion-symbol lavender">✳</span><span><strong>Plan my week</strong><small>Make space for what matters</small></span><ArrowUp size={15} />
+                <button onClick={() => setInput("Help me make this email clear, warm, and concise.")}>
+                  <span className="suggestion-symbol"><PenLine size={16} /></span><span><strong>Write with clarity</strong><small>Shape a note or first draft</small></span><ArrowUpRight size={15} />
                 </button>
-                <button onClick={() => setInput("Explain a complex idea in simple terms.")}>
-                  <span className="suggestion-symbol mint">↗</span><span><strong>Make it make sense</strong><small>Untangle a tricky topic</small></span><ArrowUp size={15} />
+                <button onClick={() => setInput("Help me compare these options and think through the trade-offs.")}>
+                  <span className="suggestion-symbol"><Compass size={16} /></span><span><strong>Think it through</strong><small>Compare choices and trade-offs</small></span><ArrowUpRight size={15} />
                 </button>
-                <button onClick={() => setInput("Help me brainstorm a fresh idea.")}>
-                  <span className="suggestion-symbol peach">✦</span><span><strong>Find a fresh angle</strong><small>Start with a blank page</small></span><ArrowUp size={15} />
+                <button onClick={() => setInput("Explain a complex topic in plain language, starting with the essentials.")}>
+                  <span className="suggestion-symbol"><BookOpen size={16} /></span><span><strong>Learn the essentials</strong><small>Make a complex topic clearer</small></span><ArrowUpRight size={15} />
                 </button>
               </div>
             </div>
@@ -159,7 +209,7 @@ export default function App() {
             <div className="message-list">
               {messages.map((message) => (
                 <article key={message.id} className={`message-row ${message.role}`}>
-                  {message.role !== "user" && <div className="assistant-avatar"><Sparkles size={15} /></div>}
+                  {message.role !== "user" && <div className="assistant-avatar">L</div>}
                   <div className="message-content" data-testid={message.role === "assistant" ? "assistant-message" : undefined}>
                     <div className="message-author">{message.role === "user" ? "You" : message.role === "error" ? "Couldn't send" : "Lyftr"}</div>
                     <div className="message-text">{message.content}</div>
@@ -180,7 +230,7 @@ export default function App() {
               ))}
               {isSending && (
                 <div className="message-row assistant pending-row">
-                  <div className="assistant-avatar"><Sparkles size={15} /></div>
+                  <div className="assistant-avatar">L</div>
                   <div className="message-content"><div className="message-author">Lyftr</div><div className="typing"><LoaderCircle size={15} /> Thinking through it…</div></div>
                 </div>
               )}
