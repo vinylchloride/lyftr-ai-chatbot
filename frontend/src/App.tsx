@@ -30,13 +30,52 @@ type Message = {
 };
 
 type ChatResponse = {
+  session_id: string;
   reply: string;
   metadata: Metadata;
+};
+
+type RecentChat = {
+  session_id: string;
+  title: string;
+  updated_at: string;
+};
+
+type HistoryResponse = {
+  session_id: string;
+  messages: Array<{
+    role: "user" | "assistant";
+    content: string;
+    metadata?: Metadata;
+  }>;
 };
 
 type ServiceStatus = "checking" | "online" | "offline";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
+const RECENT_CHATS_KEY = "lyftr.recent-chats.v1";
+const MAX_RECENT_CHATS = 12;
+
+function isRecentChat(value: unknown): value is RecentChat {
+  if (!value || typeof value !== "object") return false;
+  const chat = value as Record<string, unknown>;
+  return (
+    typeof chat.session_id === "string" &&
+    typeof chat.title === "string" &&
+    typeof chat.updated_at === "string"
+  );
+}
+
+function recentChatTitle(message: string): string {
+  const title = message.replace(/\s+/g, " ").trim();
+  return title.length > 36 ? `${title.slice(0, 36)}…` : title;
+}
+
+function formatRecentChatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+}
 
 function createSessionId(): string {
   return `s-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -50,11 +89,15 @@ function friendlyError(status: number, detail: unknown): string {
 }
 
 export default function App() {
-  const [sessionId] = useState(createSessionId);
+  const [sessionId, setSessionId] = useState(createSessionId);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [recentChats, setRecentChats] = useState<RecentChat[]>([]);
+  const [recentChatsLoaded, setRecentChatsLoaded] = useState(false);
+  const [recentChatsError, setRecentChatsError] = useState("");
   const [input, setInput] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [simulateFailover, setSimulateFailover] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const [showTips, setShowTips] = useState(false);
@@ -84,10 +127,34 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(RECENT_CHATS_KEY);
+      if (saved) {
+        const parsed: unknown = JSON.parse(saved);
+        if (!Array.isArray(parsed)) throw new Error("Invalid recent-chat data");
+        setRecentChats(parsed.filter(isRecentChat).slice(0, MAX_RECENT_CHATS));
+      }
+    } catch {
+      setRecentChatsError("Recent chats could not be read from this browser.");
+    } finally {
+      setRecentChatsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!recentChatsLoaded) return;
+    try {
+      window.localStorage.setItem(RECENT_CHATS_KEY, JSON.stringify(recentChats));
+    } catch {
+      setRecentChatsError("Recent chats could not be saved in this browser.");
+    }
+  }, [recentChats, recentChatsLoaded]);
+
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = input.trim();
-    if (!text || isSending || text.length > 4000) return;
+    if (!text || isSending || loadingSessionId || text.length > 4000) return;
 
     setInput("");
     setIsSending(true);
@@ -115,12 +182,70 @@ export default function App() {
         ...current,
         { id: crypto.randomUUID(), role: "assistant", content: result.reply, metadata: result.metadata },
       ]);
+      setRecentChats((current) => {
+        const existing = current.find((chat) => chat.session_id === result.session_id);
+        return [
+          {
+            session_id: result.session_id,
+            title: existing?.title ?? recentChatTitle(text),
+            updated_at: new Date().toISOString(),
+          },
+          ...current.filter((chat) => chat.session_id !== result.session_id),
+        ].slice(0, MAX_RECENT_CHATS);
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Something went wrong. Please try again.";
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "error", content: message }]);
     } finally {
       setIsSending(false);
       setSimulateFailover(false);
+    }
+  }
+
+  function startNewChat() {
+    if (isSending || loadingSessionId) return;
+    setSessionId(createSessionId());
+    setMessages([]);
+    setInput("");
+    setSystemPrompt("");
+    setShowPrompt(false);
+    setShowTips(false);
+    setSimulateFailover(false);
+  }
+
+  async function openRecentChat(chat: RecentChat) {
+    if (isSending || loadingSessionId) return;
+    setRecentChatsError("");
+    setLoadingSessionId(chat.session_id);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/sessions/${encodeURIComponent(chat.session_id)}/messages`,
+      );
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail = body && typeof body === "object" && "detail" in body ? body.detail : null;
+        throw new Error(friendlyError(response.status, detail));
+      }
+      const history = body as HistoryResponse;
+      setSessionId(history.session_id);
+      setMessages(
+        history.messages.map((message, index) => ({
+          id: `${history.session_id}-${index}`,
+          role: message.role,
+          content: message.content,
+          metadata: message.metadata,
+        })),
+      );
+      setInput("");
+      setSystemPrompt("");
+      setShowPrompt(false);
+      setSimulateFailover(false);
+    } catch (error) {
+      setRecentChatsError(
+        error instanceof Error ? error.message : "This conversation could not be opened.",
+      );
+    } finally {
+      setLoadingSessionId(null);
     }
   }
 
@@ -144,18 +269,45 @@ export default function App() {
           <span className="brand-mark">L</span>
           <span className="brand-name">LYFTR<span className="brand-light"> / AI</span></span>
         </a>
-        <button className="new-chat-button" onClick={() => window.location.reload()}>
+        <button
+          className="new-chat-button"
+          disabled={isSending || Boolean(loadingSessionId)}
+          onClick={startNewChat}
+        >
           <PenLine size={15} /> <span>New conversation</span>
         </button>
         <div className="sidebar-divider" />
-        <div className="sidebar-label">CURRENT CHAT</div>
-        <div className="session-card">
-          <span className="session-icon"><MessageSquareText size={14} /></span>
-          <span className="session-copy">
-            <strong>{conversationTitle}</strong>
-            <small>{sessionId.slice(0, 14)}…</small>
-          </span>
-          <span className="session-state">OPEN</span>
+        <div className="sidebar-label recent-chat-heading">
+          <span>RECENT CHATS</span><span>{recentChats.length}</span>
+        </div>
+        <div className="recent-chat-list">
+          {recentChats.map((chat) => (
+            <button
+              aria-current={chat.session_id === sessionId ? "page" : undefined}
+              className={`session-card recent-chat-button ${chat.session_id === sessionId ? "active" : ""}`}
+              disabled={isSending || Boolean(loadingSessionId)}
+              key={chat.session_id}
+              onClick={() => void openRecentChat(chat)}
+              title={chat.title}
+              type="button"
+            >
+              <span className="session-icon">
+                {loadingSessionId === chat.session_id
+                  ? <LoaderCircle size={14} className="spin" />
+                  : <MessageSquareText size={14} />}
+              </span>
+              <span className="session-copy">
+                <strong>{chat.title}</strong>
+                <small>{formatRecentChatDate(chat.updated_at)}</small>
+              </span>
+            </button>
+          ))}
+          {recentChats.length === 0 && (
+            <p className="recent-chat-empty">
+              {recentChatsLoaded ? "Your conversations will appear here." : "Loading conversations…"}
+            </p>
+          )}
+          {recentChatsError && <p className="recent-chat-error" role="status">{recentChatsError}</p>}
         </div>
         <div className="sidebar-spacer" />
         <div className="sidebar-note">
@@ -164,7 +316,7 @@ export default function App() {
         </div>
         <div className="sidebar-footer">
           <div className="footer-mark">L</div>
-          <div className="profile-copy"><strong>Private session</strong><small>New chat on page refresh</small></div>
+          <div className="profile-copy"><strong>Guest mode</strong><small>Recent chats stay in this browser</small></div>
           <button className="icon-button footer-help" aria-label="About this chat" onClick={() => setShowTips(!showTips)}>
             <CircleHelp size={16} />
           </button>
@@ -276,19 +428,35 @@ export default function App() {
             />
             <div className="composer-bottom">
               <div className="composer-tools">
-                <button className={`tool-button ${showPrompt ? "active" : ""}`} onClick={() => setShowPrompt(!showPrompt)} type="button">
+                <button
+                  className={`tool-button ${showPrompt ? "active" : ""}`}
+                  disabled={isSending || Boolean(loadingSessionId)}
+                  onClick={() => setShowPrompt(!showPrompt)}
+                  type="button"
+                >
                   <Plus size={15} /> <span>Instructions</span>
                 </button>
                 <span className="tool-separator" />
                 <label className="simulation-toggle" title="Requires failure simulation to be enabled on the backend">
-                  <input checked={simulateFailover} onChange={(event) => setSimulateFailover(event.target.checked)} type="checkbox" />
+                  <input
+                    checked={simulateFailover}
+                    disabled={isSending || Boolean(loadingSessionId)}
+                    onChange={(event) => setSimulateFailover(event.target.checked)}
+                    type="checkbox"
+                  />
                   <span className="toggle-track"><span /></span>
                   <span>Test failover</span>
                 </label>
               </div>
               <div className="send-controls">
                 <span className={`char-count ${input.length > 3800 ? "near-limit" : ""}`}>{input.length}/4000</span>
-                <button className="send-button" data-testid="send-button" disabled={!input.trim() || isSending || input.trim().length > 4000} type="submit" aria-label="Send message">
+                <button
+                  className="send-button"
+                  data-testid="send-button"
+                  disabled={!input.trim() || isSending || Boolean(loadingSessionId) || input.trim().length > 4000}
+                  type="submit"
+                  aria-label="Send message"
+                >
                   {isSending ? <LoaderCircle size={17} className="spin" /> : <ArrowUp size={18} strokeWidth={2.3} />}
                 </button>
               </div>
