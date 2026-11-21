@@ -2,7 +2,7 @@
 
 ## 1. Live URLs
 
-- Frontend: Add the public Vercel URL here
+- Frontend: https://lyftr-ai-chatbot.vercel.app/
 - Backend: https://lyftr-ai-chatbot.onrender.com
 - Health check: https://lyftr-ai-chatbot.onrender.com/health
 - Repository: https://github.com/vinylchloride/lyftr-ai-chatbot
