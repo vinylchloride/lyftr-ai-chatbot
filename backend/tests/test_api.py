@@ -43,7 +43,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         database_url=f"sqlite:///{tmp_path / 'chat.db'}",
         allowed_origins=("http://localhost:3000",),
         enable_failure_simulation=True,
-        model="gemini/gemini-3.6-flash",
+        model="gemini/gemini-3.5-flash-lite",
         default_system_prompt="Be useful.",
         cache_ttl_seconds=60,
     )
@@ -77,7 +77,7 @@ def test_health_and_successful_chat_include_per_request_metadata(client: TestCli
     assert response.json()["reply"] == "Answer: hello"
     assert response.json()["metadata"] == {
         "resolution_source": "LIVE_INFERENCE",
-        "model": "gemini/gemini-3.6-flash",
+        "model": "gemini/gemini-3.5-flash-lite",
         "latency_ms": response.json()["metadata"]["latency_ms"],
         "input_tokens": 23,
         "output_tokens": 7,

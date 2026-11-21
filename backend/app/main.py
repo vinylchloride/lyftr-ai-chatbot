@@ -34,6 +34,9 @@ class Settings:
     model: str
     default_system_prompt: str
     cache_ttl_seconds: int
+    provider_timeout_seconds: int = 25
+    max_history_messages: int = 20
+    max_output_tokens: int = 512
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -48,12 +51,15 @@ class Settings:
             database_url=os.getenv("DATABASE_URL", "sqlite:////data/app.db"),
             allowed_origins=origins,
             enable_failure_simulation=os.getenv("ENABLE_FAILURE_SIMULATION", "false").lower() == "true",
-            model=os.getenv("LLM_MODEL", "gemini/gemini-3.6-flash"),
+            model=os.getenv("LLM_MODEL", "gemini/gemini-3.5-flash-lite"),
             default_system_prompt=os.getenv(
                 "DEFAULT_SYSTEM_PROMPT",
                 "You are a helpful, concise assistant. Use the conversation history when answering.",
             ),
             cache_ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "3600")),
+            provider_timeout_seconds=int(os.getenv("PROVIDER_TIMEOUT_SECONDS", "25")),
+            max_history_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "20")),
+            max_output_tokens=int(os.getenv("MAX_OUTPUT_TOKENS", "512")),
         )
 
 
@@ -273,6 +279,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if payload.system_prompt is not None
             else stored_prompt or settings.default_system_prompt
         )
+        if settings.max_history_messages > 0:
+            history = history[-settings.max_history_messages:]
         messages = [{"role": "system", "content": system_prompt}, *history, {"role": "user", "content": payload.message}]
 
         started = time.perf_counter()
@@ -292,7 +300,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     messages=messages,
                     api_key=api_key,
                     caching=not has_simulation,
-                    timeout=45,
+                    timeout=settings.provider_timeout_seconds,
+                    max_tokens=settings.max_output_tokens,
+                    temperature=0.2,
                 )
                 key_id = current_key_id
                 break
