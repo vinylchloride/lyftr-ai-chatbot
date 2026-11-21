@@ -127,10 +127,13 @@ def test_history_is_persisted_in_order_and_context_is_sent(client: TestClient) -
     ]
 
 
-def test_simulated_failure_fails_over_and_records_actual_key(client: TestClient) -> None:
+@pytest.mark.parametrize("status", [429, 500, 502, 503])
+def test_simulated_provider_status_fails_over_and_records_actual_key(
+    client: TestClient, status: int
+) -> None:
     response = client.post(
         "/chat",
-        headers={"X-Simulate-Failure": "key_1=429"},
+        headers={"X-Simulate-Failure": f"key_1={status}"},
         json={"session_id": "s-failover", "message": "try the backup"},
     )
     assert response.status_code == 200
@@ -175,6 +178,35 @@ def test_prompt_override_persists_for_session(client: TestClient) -> None:
     assert FakeCompletion.calls[1]["messages"][0] == {"role": "system", "content": "Be brief."}
 
 
+def test_context_limit_does_not_delete_saved_session_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.main.litellm.completion", FakeCompletion.complete)
+    FakeCompletion.reset()
+    settings = Settings(
+        api_keys=("test-key-1", "test-key-2"),
+        database_url=f"sqlite:///{tmp_path / 'limited-history.db'}",
+        allowed_origins=("http://localhost:3000",),
+        enable_failure_simulation=False,
+        model="gemini/gemini-3.5-flash-lite",
+        default_system_prompt="Be useful.",
+        cache_ttl_seconds=60,
+        max_history_messages=2,
+    )
+    with TestClient(create_app(settings)) as test_client:
+        for message in ("First", "Second", "Third"):
+            assert chat(test_client, "s-limited", message).status_code == 200
+        history = test_client.get("/sessions/s-limited/messages").json()["messages"]
+
+    assert len(history) == 6
+    assert [item["content"] for item in FakeCompletion.calls[2]["messages"]] == [
+        "Be useful.",
+        "Second",
+        "Answer: Second",
+        "Third",
+    ]
+
+
 def test_litellm_cache_reuses_identical_first_turn_across_sessions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -206,6 +238,7 @@ def test_litellm_cache_reuses_identical_first_turn_across_sessions(
     assert first["reply"] == second["reply"] == "A cached answer."
     assert first["metadata"]["resolution_source"] == "LIVE_INFERENCE"
     assert second["metadata"]["resolution_source"] == "LLM_CACHE"
+    assert second["metadata"]["latency_ms"] < first["metadata"]["latency_ms"]
     assert second["metadata"]["key_id"] is None
     assert second["metadata"]["input_tokens"] == first["metadata"]["input_tokens"]
     assert different["metadata"]["resolution_source"] == "LIVE_INFERENCE"

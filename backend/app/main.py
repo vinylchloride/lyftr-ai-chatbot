@@ -303,6 +303,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     timeout=settings.provider_timeout_seconds,
                     max_tokens=settings.max_output_tokens,
                     temperature=0.2,
+                    **({"reasoning_effort": "low"} if settings.model.startswith("gemini/") else {}),
                 )
                 key_id = current_key_id
                 break

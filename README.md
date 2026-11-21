@@ -110,11 +110,15 @@ LiteLLM uses a local in-memory cache. The cache key is based on the model and th
 
 The cache is process-local. A backend restart clears cache entries, while SQLite chat history remains separate.
 
+The default model uses low reasoning effort and a 512-token reply limit to keep routine chat responses responsive. The backend still sends recent conversation context and stores the complete transcript in SQLite. `MAX_HISTORY_MESSAGES` controls only the amount of past context sent to the model.
+
 ### SQLite session storage
 
 The backend creates the SQLite tables automatically at startup. User and assistant messages are stored in the `messages` table for a `session_id`. Only successful chat responses are saved.
 
 The Docker setup mounts the named `chatbot_data` volume at `/data`, with SQLite at `/data/app.db`. The `/sessions/{session_id}/messages` endpoint returns oldest-first history without the system prompt.
+
+The deployed Render service must have a persistent disk mounted at `/data` for history to survive restarts and redeploys. Without that disk, the API can work but deployed SQLite history is ephemeral and does not fully meet the persistence requirement.
 
 ## 4. Verification: how to see failover, cache hits and per-message token usage
 
